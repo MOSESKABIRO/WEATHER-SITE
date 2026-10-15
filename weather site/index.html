@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weather</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap">
+<style>
+  :root{--bg:#e6edf1;--ink:#14212b;--mute:#5b6b77;--panel:#f7fafb;--line:#c9d6de;--sun:#f2a33a;--rain:#2f6f9f}
+  @media (prefers-color-scheme:dark){:root{--bg:#10191f;--ink:#e8f0f4;--mute:#8fa3b0;--panel:#18252d;--line:#2b3b45;--sun:#f2b04f;--rain:#6aaedb}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Bricolage Grotesque",system-ui,sans-serif;min-height:100vh}
+  main{max-width:860px;margin:0 auto;padding:32px 20px 56px}
+  .search{display:flex;gap:8px}
+  input{flex:1;font:inherit;font-size:1.1rem;padding:14px 16px;border:2px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink)}
+  button{font:inherit;font-weight:600;padding:14px 22px;border:0;border-radius:10px;background:var(--ink);color:var(--bg);cursor:pointer}
+  input:focus-visible,button:focus-visible{outline:3px solid var(--sun);outline-offset:2px}
+  #msg{color:var(--mute);margin:18px 2px;min-height:1.4em}
+  #msg.err{color:#c0392b}
+  .now{display:grid;grid-template-columns:auto 1fr;gap:8px 28px;align-items:center;padding:28px;background:var(--panel);border-radius:16px;margin-top:8px}
+  .now .icon{font-size:5.5rem;line-height:1}
+  .city{font-size:1.1rem;color:var(--mute);margin:0}
+  .temp{font-size:5rem;font-weight:800;line-height:1;margin:2px 0;letter-spacing:-.03em}
+  .cond{font-size:1.25rem;margin:0}
+  .facts{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:10px 32px;margin-top:12px;padding-top:16px;border-top:1px solid var(--line)}
+  .facts div{display:flex;flex-direction:column}
+  .facts b{font-size:1.15rem}
+  .facts span{color:var(--mute);font-size:.9rem}
+  h2{font-size:1.1rem;margin:32px 0 12px}
+  .days{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:10px}
+  .day{background:var(--panel);border-radius:12px;padding:14px 10px;text-align:center}
+  .day .d{font-weight:600}
+  .day .i{font-size:2rem;margin:6px 0}
+  .day .hi{font-weight:800}
+  .day .lo{color:var(--mute)}
+  .day .p{color:var(--rain);font-size:.85rem;margin-top:4px}
+  [hidden]{display:none}
+  @media(max-width:520px){.now{grid-template-columns:1fr}.temp{font-size:4rem}}
+</style>
+</head>
+<body>
+<main>
+  <div class="search" role="search">
+    <input id="city" type="text" placeholder="Enter a city, e.g. Nairobi" aria-label="City" autocomplete="off">
+    <button id="go">Search</button>
+  </div>
+  <p id="msg" role="status">Type a city to see its weather.</p>
+
+  <section id="result" hidden>
+    <div class="now">
+      <div class="icon" id="icon"></div>
+      <div>
+        <p class="city" id="place"></p>
+        <p class="temp" id="temp"></p>
+        <p class="cond" id="cond"></p>
+      </div>
+      <div class="facts">
+        <div><b id="feels"></b><span>Feels like</span></div>
+        <div><b id="hum"></b><span>Humidity</span></div>
+        <div><b id="wind"></b><span>Wind</span></div>
+      </div>
+    </div>
+    <h2>7-day forecast</h2>
+    <div class="days" id="days"></div>
+  </section>
+</main>
+
+<script>
+// Open-Meteo: free, no API key needed.
+const GEO = "https://geocoding-api.open-meteo.com/v1/search";
+const FORECAST = "https://api.open-meteo.com/v1/forecast";
+
+const CODES = {
+  0:["Clear sky","☀️"],1:["Mostly clear","🌤️"],2:["Partly cloudy","⛅"],3:["Overcast","☁️"],
+  45:["Fog","🌫️"],48:["Freezing fog","🌫️"],
+  51:["Light drizzle","🌦️"],53:["Drizzle","🌦️"],55:["Heavy drizzle","🌧️"],
+  61:["Light rain","🌦️"],63:["Rain","🌧️"],65:["Heavy rain","🌧️"],
+  66:["Freezing rain","🌧️"],67:["Freezing rain","🌧️"],
+  71:["Light snow","🌨️"],73:["Snow","🌨️"],75:["Heavy snow","❄️"],77:["Snow grains","❄️"],
+  80:["Rain showers","🌦️"],81:["Rain showers","🌧️"],82:["Violent showers","⛈️"],
+  85:["Snow showers","🌨️"],86:["Snow showers","🌨️"],
+  95:["Thunderstorm","⛈️"],96:["Thunderstorm, hail","⛈️"],99:["Thunderstorm, hail","⛈️"]
+};
+const info = c => CODES[c] || ["Unknown","🌡️"];
+
+const $ = id => document.getElementById(id);
+const msg = (t, err) => { $("msg").textContent = t; $("msg").className = err ? "err" : ""; };
+
+async function search() {
+  const q = $("city").value.trim();
+  if (!q) return msg("Enter a city name first.", true);
+  $("result").hidden = true;
+  msg("Loading…");
+  try {
+    const g = await (await fetch(`${GEO}?name=${encodeURIComponent(q)}&count=1`)).json();
+    if (!g.results || !g.results.length) return msg(`No city found for "${q}". Check the spelling and try again.`, true);
+    const p = g.results[0];
+
+    const url = `${FORECAST}?latitude=${p.latitude}&longitude=${p.longitude}` +
+      `&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code` +
+      `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+      `&timezone=auto&forecast_days=7`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("Weather service error");
+    const w = await r.json();
+    render(p, w);
+    msg("");
+  } catch (e) {
+    console.error(e);
+    msg(`Couldn't load weather (${e.name}: ${e.message}). If you're viewing this inside Claude, download the file and open it in your browser instead.`, true);
+  }
+}
+
+function render(p, w) {
+  const c = w.current, [text, icon] = info(c.weather_code);
+  $("place").textContent = [p.name, p.admin1, p.country].filter(Boolean).join(", ");
+  $("icon").textContent = icon;
+  $("temp").textContent = Math.round(c.temperature_2m) + "°C";
+  $("cond").textContent = text;
+  $("feels").textContent = Math.round(c.apparent_temperature) + "°C";
+  $("hum").textContent = c.relative_humidity_2m + "%";
+  $("wind").textContent = Math.round(c.wind_speed_10m) + " km/h";
+
+  const d = w.daily;
+  $("days").innerHTML = d.time.map((t, i) => {
+    const [txt, ic] = info(d.weather_code[i]);
+    const name = i === 0 ? "Today" : new Date(t + "T12:00").toLocaleDateString(undefined, {weekday: "short"});
+    return `<div class="day" title="${txt}">
+      <div class="d">${name}</div><div class="i">${ic}</div>
+      <div class="hi">${Math.round(d.temperature_2m_max[i])}°</div>
+      <div class="lo">${Math.round(d.temperature_2m_min[i])}°</div>
+      <div class="p">${d.precipitation_probability_max[i] ?? 0}% rain</div></div>`;
+  }).join("");
+  $("result").hidden = false;
+}
+
+$("go").addEventListener("click", search);
+$("city").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+</script>
+</body>
+</html>
